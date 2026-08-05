@@ -1,0 +1,428 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="robots" content="noindex, nofollow">
+<title>Мой день</title>
+<!--
+  Дневник «Мой день». Статическая страница, живёт на GitHub Pages.
+
+  ЗДЕСЬ НЕТ НИ ОДНОГО ЛИЧНОГО ПУНКТА, И БЫТЬ НЕ ДОЛЖНО. Pages отдаёт репозиторий
+  публично, а список вопросов - самое личное, что есть в этой затее. Вопросы
+  приезжают один раз ссылкой вида ...#q=<base64> и оседают в localStorage
+  телефона. Фрагмент адреса (всё после #) браузер на сервер не отправляет, в
+  логах Pages его нет.
+
+  Запись ответов - прямо в Google Drive, областью drive.file: страница видит
+  только те файлы, которые создала сама, до остального Drive ей хода нет.
+  Отсюда же ограничение: прочитать файл, положенный с компьютера, она не может -
+  поэтому вопросы и передаются ссылкой, а не лежат в Drive.
+
+  Файл за сутки: одна запись YYYY-MM-DD.json в папке, которую страница заводит
+  сама. Повторная отправка того же дня перезаписывает файл, а не плодит копии.
+  Дальше файл сам приезжает на диск через Drive for Desktop, и импорт читает его
+  локально - никакого Drive API со стороны компьютера.
+-->
+<style>
+  :root {
+    --bg: #14151a;
+    --card: #1c1e26;
+    --line: #2a2d38;
+    --text: #e8e9ed;
+    --dim: #8b8fa3;
+    --done: #4a7dff;
+    --joy: #f0a020;
+    --bad: #e05555;
+    --ok: #3ba55d;
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  body {
+    margin: 0; padding: 0 0 6rem;
+    background: var(--bg); color: var(--text);
+    font: 16px/1.4 -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  header {
+    position: sticky; top: 0; z-index: 10;
+    background: var(--bg); border-bottom: 1px solid var(--line);
+    padding: .8rem 1rem calc(.8rem + env(safe-area-inset-top));
+    padding-top: max(.8rem, env(safe-area-inset-top));
+  }
+  h1 { margin: 0; font-size: 1.15rem; font-weight: 600; }
+  .sub { color: var(--dim); font-size: .8rem; margin-top: .15rem; }
+  section { margin: 1.2rem 0 0; }
+  h2 {
+    margin: 0; padding: .5rem 1rem;
+    font-size: .78rem; font-weight: 600; letter-spacing: .06em;
+    text-transform: uppercase; color: var(--dim);
+  }
+  .rows { background: var(--card); border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+  .row {
+    display: flex; align-items: center; gap: .5rem;
+    padding: .1rem .6rem .1rem 1rem;
+    border-bottom: 1px solid var(--line);
+  }
+  .row:last-child { border-bottom: 0; }
+  .label { flex: 1; padding: .7rem 0; font-size: .95rem; }
+  /* Кнопки крупные не для красоты: это заполняется большим пальцем в темноте
+     перед сном, и промах по чужой строке дороже лишних десяти пикселей. */
+  .tog {
+    width: 3.1rem; height: 2.6rem; flex: none;
+    border: 1px solid var(--line); border-radius: .55rem;
+    background: transparent; color: var(--dim);
+    font-size: 1.1rem; cursor: pointer;
+  }
+  .tog[aria-pressed="true"] { color: #fff; border-color: transparent; }
+  .tog.done[aria-pressed="true"] { background: var(--done); }
+  .tog.joy[aria-pressed="true"]  { background: var(--joy); }
+  section.negative .tog.done[aria-pressed="true"] { background: var(--bad); }
+  .chips { display: flex; flex-wrap: wrap; gap: .5rem; padding: 0 1rem; }
+  .chip {
+    padding: .8rem 1.1rem; border: 1px solid var(--line); border-radius: 999px;
+    background: var(--card); color: var(--dim); font: inherit; cursor: pointer;
+  }
+  .chip[aria-pressed="true"] { background: var(--done); color: #fff; border-color: transparent; }
+  .heads { display: flex; gap: .5rem; justify-content: flex-end; padding: 0 .6rem .25rem 1rem; }
+  .heads span { width: 3.1rem; text-align: center; font-size: .66rem; color: var(--dim); }
+  textarea {
+    width: calc(100% - 2rem); margin: 0 1rem; min-height: 8rem;
+    background: var(--card); color: var(--text);
+    border: 1px solid var(--line); border-radius: .55rem; padding: .7rem;
+    font: inherit; resize: vertical;
+  }
+  .bar {
+    position: fixed; left: 0; right: 0; bottom: 0; z-index: 10;
+    background: var(--bg); border-top: 1px solid var(--line);
+    padding: .7rem 1rem calc(.7rem + env(safe-area-inset-bottom));
+    display: flex; gap: .6rem; align-items: center;
+  }
+  button.send {
+    flex: 1; padding: .9rem; border: 0; border-radius: .6rem;
+    background: var(--done); color: #fff; font-size: 1rem; font-weight: 600;
+    cursor: pointer;
+  }
+  button.send:disabled { opacity: .5; }
+  .status { font-size: .8rem; color: var(--dim); flex: 1; }
+  .status.ok { color: var(--ok); }
+  .status.err { color: var(--bad); }
+  .setup { padding: 1.5rem 1rem; color: var(--dim); }
+  .setup code { color: var(--text); word-break: break-all; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Мой день</h1>
+  <div class="sub" id="sub">—</div>
+</header>
+
+<main id="app"></main>
+
+<div class="bar">
+  <button class="send" id="send" disabled>Отправить</button>
+  <div class="status" id="status"></div>
+</div>
+
+<script src="https://accounts.google.com/gsi/client" async defer></script>
+<script>
+"use strict";
+
+const LS_QUESTIONS = "moyden.questions";
+const LS_DRAFT     = "moyden.draft.";
+const LS_FOLDER    = "moyden.folderId";
+const FOLDER_NAME  = "Мой день — записи";
+const SCOPE        = "https://www.googleapis.com/auth/drive.file";
+
+let CONFIG = null;      // app-config.json: { clientId }
+let QUESTIONS = null;   // { version, sections:[{key,title,done,enjoyed,negative,items:[{id,text}]}] }
+let STATE = { done: {}, joy: {}, diary: "" };
+
+// Сутки меняются не в полночь, а в 5 утра: заполнение в 00:30 - это про
+// прошедший день, и датировать его завтрашним числом значит потерять день.
+function dayKey(now = new Date()) {
+  const d = new Date(now);
+  if (d.getHours() < 5) d.setDate(d.getDate() - 1);
+  return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0")
+       + "-" + String(d.getDate()).padStart(2, "0");
+}
+
+function say(msg, cls = "") {
+  const el = document.getElementById("status");
+  el.textContent = msg;
+  el.className = "status " + cls;
+}
+
+// --- приём вопросов и автогалок из фрагмента адреса ------------------------
+// Фрагмент выбираем намеренно: параметры запроса уходят на сервер и оседают в
+// логах, фрагмент - нет.
+function readFragment() {
+  const raw = location.hash.slice(1);
+  if (!raw) return {};
+  const out = {};
+  for (const part of raw.split("&")) {
+    const [k, v] = part.split("=");
+    if (k && v) out[k] = v;
+  }
+  return out;
+}
+
+function decodePayload(b64) {
+  const bin = atob(b64.replace(/-/g, "+").replace(/_/g, "/"));
+  const bytes = Uint8Array.from(bin, c => c.charCodeAt(0));
+  return JSON.parse(new TextDecoder().decode(bytes));
+}
+
+// --- отрисовка ------------------------------------------------------------
+function render() {
+  const app = document.getElementById("app");
+  app.innerHTML = "";
+
+  if (!QUESTIONS) {
+    app.innerHTML = '<div class="setup">Список вопросов ещё не загружен.<br><br>'
+      + 'Открой ссылку с вопросами - её присылает бот. Она выглядит так:<br>'
+      + '<code>' + location.origin + location.pathname + '#q=…</code><br><br>'
+      + 'После первого раза список останется в памяти телефона, и дальше '
+      + 'достаточно обычного адреса.</div>';
+    return;
+  }
+
+  for (const sec of QUESTIONS.sections) {
+    const s = document.createElement("section");
+    if (sec.negative) s.className = "negative";
+
+    // Раздел с вариантами: один вопрос, ответы в строку. Колонки наслаждения у
+    // него нет — «работал 1-3ч с наслаждением» это не тот вопрос, который
+    // человек может осмысленно раздельно отметить по каждому интервалу.
+    if (sec.kind === "choice") {
+      s.innerHTML = "<h2>" + esc(sec.title) + "</h2>";
+      const chips = document.createElement("div");
+      chips.className = "chips";
+      for (const it of sec.items) {
+        chips.innerHTML += '<button class="chip" data-id="' + it.id
+          + '" data-k="done" aria-pressed="false">' + esc(it.text) + "</button>";
+      }
+      s.appendChild(chips);
+      app.appendChild(s);
+      continue;
+    }
+
+    s.innerHTML = "<h2>" + esc(sec.title) + "</h2>"
+      + '<div class="heads"><span>' + esc(sec.done) + "</span><span>"
+      + esc(sec.enjoyed) + "</span></div>";
+    const rows = document.createElement("div");
+    rows.className = "rows";
+    for (const it of sec.items) {
+      const row = document.createElement("div");
+      row.className = "row";
+      row.innerHTML = '<div class="label">' + esc(it.text) + "</div>"
+        + '<button class="tog done" data-id="' + it.id + '" data-k="done" aria-pressed="false">✓</button>'
+        + '<button class="tog joy"  data-id="' + it.id + '" data-k="joy"  aria-pressed="false">♥</button>';
+      rows.appendChild(row);
+    }
+    s.appendChild(rows);
+    app.appendChild(s);
+  }
+
+  const d = document.createElement("section");
+  d.innerHTML = "<h2>Дневник дня</h2>";
+  const ta = document.createElement("textarea");
+  ta.id = "diary";
+  ta.placeholder = "Свободно. Если не идёт — что было главным, что порадовало, что тревожит.";
+  ta.value = STATE.diary || "";
+  ta.addEventListener("input", () => { STATE.diary = ta.value; saveDraft(); });
+  d.appendChild(ta);
+  app.appendChild(d);
+
+  app.addEventListener("click", onToggle);
+  paint();
+  document.getElementById("send").disabled = false;
+}
+
+function esc(s) {
+  return String(s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+}
+
+function onToggle(e) {
+  const b = e.target.closest(".tog, .chip");
+  if (!b) return;
+  const id = b.dataset.id, k = b.dataset.k;
+  const bag = k === "done" ? STATE.done : STATE.joy;
+  bag[id] = !bag[id];
+  // Радость от того, чего не было, - противоречие, а не данные. Гасим сразу,
+  // чтобы человек видел это на экране, а не узнал из ошибки импорта.
+  if (k === "done" && !bag[id]) STATE.joy[id] = false;
+  if (k === "joy" && bag[id]) STATE.done[id] = true;
+  paint();
+  saveDraft();
+}
+
+function paint() {
+  document.querySelectorAll(".tog, .chip").forEach(b => {
+    const bag = b.dataset.k === "done" ? STATE.done : STATE.joy;
+    b.setAttribute("aria-pressed", bag[b.dataset.id] ? "true" : "false");
+  });
+  const total = QUESTIONS.sections.reduce((n, s) => n + s.items.length, 0);
+  const done = Object.values(STATE.done).filter(Boolean).length;
+  document.getElementById("sub").textContent =
+    dayKey() + " · отмечено " + done + " из " + total;
+}
+
+// --- черновик -------------------------------------------------------------
+function saveDraft() {
+  try { localStorage.setItem(LS_DRAFT + dayKey(), JSON.stringify(STATE)); } catch (e) {}
+}
+function loadDraft() {
+  try {
+    const raw = localStorage.getItem(LS_DRAFT + dayKey());
+    if (raw) STATE = Object.assign(STATE, JSON.parse(raw));
+  } catch (e) {}
+}
+
+// --- Google Drive ---------------------------------------------------------
+let tokenClient = null;
+let accessToken = null;
+
+function getToken() {
+  return new Promise((resolve, reject) => {
+    if (!CONFIG || !CONFIG.clientId) {
+      reject(new Error("не задан clientId в app-config.json"));
+      return;
+    }
+    if (!window.google || !google.accounts || !google.accounts.oauth2) {
+      reject(new Error("библиотека Google не загрузилась"));
+      return;
+    }
+    if (!tokenClient) {
+      tokenClient = google.accounts.oauth2.initTokenClient({
+        client_id: CONFIG.clientId,
+        scope: SCOPE,
+        callback: resp => {
+          if (resp && resp.access_token) { accessToken = resp.access_token; resolve(accessToken); }
+          else reject(new Error("доступ не выдан"));
+        },
+      });
+    }
+    // Токен живёт около часа. Просим молча; если Google решит показать окно
+    // выбора аккаунта - покажет само.
+    tokenClient.requestAccessToken({ prompt: accessToken ? "" : "consent" });
+  });
+}
+
+async function drive(path, opts = {}) {
+  const r = await fetch("https://www.googleapis.com/" + path, Object.assign({}, opts, {
+    headers: Object.assign({ Authorization: "Bearer " + accessToken }, opts.headers || {}),
+  }));
+  if (!r.ok) throw new Error("Drive " + r.status + ": " + (await r.text()).slice(0, 200));
+  return r.json();
+}
+
+async function ensureFolder() {
+  const cached = localStorage.getItem(LS_FOLDER);
+  if (cached) return cached;
+  const q = encodeURIComponent(
+    "name='" + FOLDER_NAME + "' and mimeType='application/vnd.google-apps.folder' and trashed=false");
+  const found = await drive("drive/v3/files?q=" + q + "&fields=files(id)");
+  let id = found.files && found.files[0] && found.files[0].id;
+  if (!id) {
+    const made = await drive("drive/v3/files?fields=id", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: FOLDER_NAME, mimeType: "application/vnd.google-apps.folder" }),
+    });
+    id = made.id;
+  }
+  localStorage.setItem(LS_FOLDER, id);
+  return id;
+}
+
+async function upload() {
+  const day = dayKey();
+  const folderId = await ensureFolder();
+  const name = day + ".json";
+
+  const payload = {
+    date: day,
+    submitted_at: new Date().toISOString(),
+    questions_version: QUESTIONS.version || null,
+    done: Object.keys(STATE.done).filter(k => STATE.done[k]).map(Number),
+    enjoyed: Object.keys(STATE.joy).filter(k => STATE.joy[k]).map(Number),
+    asked: QUESTIONS.sections.flatMap(s => s.items.map(i => i.id)),
+    diary: STATE.diary || "",
+  };
+
+  const q = encodeURIComponent("name='" + name + "' and '" + folderId + "' in parents and trashed=false");
+  const exist = await drive("drive/v3/files?q=" + q + "&fields=files(id)");
+  const id = exist.files && exist.files[0] && exist.files[0].id;
+
+  const meta = id ? {} : { name: name, parents: [folderId] };
+  const boundary = "moyden" + Date.now();
+  const body =
+    "--" + boundary + "\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n"
+    + JSON.stringify(meta) + "\r\n"
+    + "--" + boundary + "\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n"
+    + JSON.stringify(payload, null, 2) + "\r\n--" + boundary + "--";
+
+  const url = "upload/drive/v3/files" + (id ? "/" + id : "") + "?uploadType=multipart&fields=id";
+  await drive(url, {
+    method: id ? "PATCH" : "POST",
+    headers: { "Content-Type": "multipart/related; boundary=" + boundary },
+    body: body,
+  });
+  return { name, replaced: !!id };
+}
+
+document.getElementById("send").addEventListener("click", async () => {
+  const btn = document.getElementById("send");
+  btn.disabled = true;
+  try {
+    say("вход в Google…");
+    await getToken();
+    say("отправляю…");
+    const r = await upload();
+    say((r.replaced ? "перезаписано: " : "сохранено: ") + r.name, "ok");
+  } catch (e) {
+    // Ошибку показываем как есть: молчаливый провал отправки выглядит ровно
+    // так же, как успех, и день окажется незаписанным без единого признака.
+    say(String(e.message || e), "err");
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+// --- старт ----------------------------------------------------------------
+(async function init() {
+  try {
+    const r = await fetch("app-config.json", { cache: "no-store" });
+    if (r.ok) CONFIG = await r.json();
+  } catch (e) {}
+
+  const frag = readFragment();
+  if (frag.q) {
+    try {
+      QUESTIONS = decodePayload(frag.q);
+      localStorage.setItem(LS_QUESTIONS, JSON.stringify(QUESTIONS));
+      // Чистим адрес, чтобы вопросы не остались в истории браузера.
+      history.replaceState(null, "", location.pathname);
+    } catch (e) { say("не разобрал список вопросов из ссылки", "err"); }
+  }
+  if (!QUESTIONS) {
+    try { QUESTIONS = JSON.parse(localStorage.getItem(LS_QUESTIONS) || "null"); } catch (e) {}
+  }
+
+  loadDraft();
+
+  if (frag.auto) {
+    try {
+      // Автогалки по данным часов. Ставим только то, что ещё не трогали руками:
+      // черновик человека важнее подсказки машины.
+      const auto = decodePayload(frag.auto);
+      for (const id of auto.done || []) if (STATE.done[id] === undefined) STATE.done[id] = true;
+      saveDraft();
+    } catch (e) {}
+  }
+
+  render();
+})();
+</script>
+</body>
+</html>
