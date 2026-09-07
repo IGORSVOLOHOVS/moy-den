@@ -438,9 +438,23 @@ async function upload() {
   const folderId = await ensureFolder();
   const name = day + ".json";
 
+  // Момент отправки пишется дважды и намеренно. submitted_at — UTC, по нему
+  // решается, какая отправка за сутки позже. submitted_local — те же часы,
+  // которые в этот момент показывали часы на стене, плюс сдвиг пояса.
+  // Без второго файл невозможно читать глазами (в 00:34 по Риге стоит 21:34Z),
+  // и он молча разъезжается с базой сна, где время наивное местное.
+  const now = new Date();
+  const pad = (n) => String(n).padStart(2, "0");
+  const local = now.getFullYear() + "-" + pad(now.getMonth() + 1) + "-" + pad(now.getDate())
+    + "T" + pad(now.getHours()) + ":" + pad(now.getMinutes()) + ":" + pad(now.getSeconds());
+
   const payload = {
     date: day,
-    submitted_at: new Date().toISOString(),
+    submitted_at: now.toISOString(),
+    submitted_local: local,
+    // Минуты от UTC: +180 летом в Риге, +120 зимой. getTimezoneOffset даёт
+    // обратный знак, поэтому минус.
+    tz_offset_min: -now.getTimezoneOffset(),
     questions_version: QUESTIONS.version || null,
     done: Object.keys(STATE.done).filter(k => STATE.done[k]).map(Number),
     enjoyed: Object.keys(STATE.joy).filter(k => STATE.joy[k]).map(Number),
