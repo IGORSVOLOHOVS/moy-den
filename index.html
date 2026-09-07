@@ -107,9 +107,36 @@
   .status.err { color: var(--bad); }
   .setup { padding: 1.5rem 1rem; color: var(--dim); }
   .setup code { color: var(--text); word-break: break-all; }
+  /* --- ползунок часов --- */
+  .slider { padding: .2rem 0 .1rem; }
+  .sliderhead { display:flex; justify-content:space-between; align-items:baseline; margin-bottom:.5rem; }
+  .sliderhead b { color: var(--done); font-size: 1.15rem; }
+  .slider input[type=range] { width:100%; accent-color: var(--done); height: 2rem; }
+  .sliderfoot { display:flex; justify-content:space-between; color:var(--dim); font-size:.8rem; }
+  .clearval { margin-top:.6rem; background:none; border:1px solid var(--line); color:var(--dim);
+              border-radius:.5rem; padding:.35rem .7rem; font-size:.8rem; }
+  /* --- подсказка «как наслаждаться» --- */
+  .label.hasguide { cursor:pointer; }
+  .gmark { display:inline-flex; align-items:center; justify-content:center;
+           width:1.05rem; height:1.05rem; margin-left:.45rem; border-radius:50%;
+           border:1px solid var(--joy); color:var(--joy); font-size:.7rem;
+           font-style:normal; vertical-align:middle; }
+  #guide { position:fixed; inset:0; background:rgba(0,0,0,.72); display:none;
+           align-items:flex-end; z-index:50; }
+  #guide.open { display:flex; }
+  .sheet { background:var(--card); width:100%; max-height:82vh; overflow:auto;
+           border-radius:1rem 1rem 0 0; padding:1.1rem 1.1rem 2rem; }
+  .sheet h3 { margin:.2rem 0 .1rem; font-size:1.05rem; }
+  .sheet .mins { color:var(--joy); font-size:.85rem; margin-bottom:.7rem; }
+  .sheet ol { margin:0 0 1.2rem; padding-left:1.3rem; }
+  .sheet li { margin:.35rem 0; }
+  .sheet .grp { color:var(--dim); font-size:.75rem; text-transform:uppercase; letter-spacing:.04em; }
+  .sheet button { width:100%; padding:.8rem; border:0; border-radius:.7rem;
+                  background:var(--done); color:#fff; font-size:1rem; }
 </style>
 </head>
 <body>
+<div id="guide" aria-hidden="true"><div class="sheet" id="sheet"></div></div>
 
 <header>
   <h1>Мой день</h1>
@@ -135,7 +162,7 @@ const SCOPE        = "https://www.googleapis.com/auth/drive.file";
 
 let CONFIG = null;      // app-config.json: { clientId }
 let QUESTIONS = null;   // { version, sections:[{key,title,done,enjoyed,negative,items:[{id,text}]}] }
-let STATE = { done: {}, joy: {}, diary: "" };
+let STATE = { done: {}, joy: {}, diary: "", values: {} };
 
 // Сутки меняются не в полночь, а в 5 утра: заполнение в 00:30 - это про
 // прошедший день, и датировать его завтрашним числом значит потерять день.
@@ -173,6 +200,37 @@ function decodePayload(b64) {
 }
 
 // --- отрисовка ------------------------------------------------------------
+
+// --- «как наслаждаться этим» ------------------------------------------------
+// Протоколы приезжают тем же фрагментом, что и вопросы. Их может не быть вовсе
+// (старая ссылка) — тогда пункты просто не кликаются, и это не ошибка.
+function protocolsFor(id) {
+  const all = (QUESTIONS && QUESTIONS.protocols) || [];
+  return all.filter(p => p.item === id);
+}
+
+function openGuide(id) {
+  const list = protocolsFor(id);
+  if (!list.length) return;
+  const sheet = document.getElementById("sheet");
+  sheet.innerHTML = list.map(p =>
+      '<div class="grp">' + esc(p.group || "") + "</div>"
+    + "<h3>" + esc(p.title) + "</h3>"
+    + '<div class="mins">' + (p.minutes ? p.minutes + " мин" : "") + "</div>"
+    + "<ol>" + p.steps.map(x => "<li>" + esc(x) + "</li>").join("") + "</ol>"
+  ).join("") + '<button id="gclose">Закрыть</button>';
+  document.getElementById("guide").classList.add("open");
+  sheet.querySelector("#gclose").addEventListener("click", closeGuide);
+}
+
+function closeGuide() { document.getElementById("guide").classList.remove("open"); }
+
+document.addEventListener("click", (e) => {
+  const lab = e.target.closest && e.target.closest(".label.hasguide");
+  if (lab) { openGuide(Number(lab.dataset.guide)); return; }
+  if (e.target && e.target.id === "guide") closeGuide();
+});
+
 function render() {
   const app = document.getElementById("app");
   app.innerHTML = "";
@@ -193,6 +251,41 @@ function render() {
     // Раздел с вариантами: один вопрос, ответы в строку. Колонки наслаждения у
     // него нет — «работал 1-3ч с наслаждением» это не тот вопрос, который
     // человек может осмысленно раздельно отметить по каждому интервалу.
+    // Раздел-ползунок: одно число вместо корзин. Пустое значение и ноль здесь
+    // РАЗНЫЕ вещи — пока не тронул ползунок, в файл не уходит ничего, потому
+    // что «не ответил» и «работал ноль часов» это разные сутки.
+    if (sec.kind === "hours") {
+      const it = sec.items[0];
+      if (!it) continue;
+      const lo = sec.min ?? 0, hi = sec.max ?? 16, st = sec.step ?? 1;
+      const cur = STATE.values[it.id];
+      s.innerHTML = "<h2>" + esc(sec.title) + "</h2>";
+      const box = document.createElement("div");
+      box.className = "slider";
+      box.innerHTML =
+        '<div class="sliderhead"><span>' + esc(it.text) + '</span>'
+        + '<b id="hv">' + (cur === undefined ? "—" : cur + " ч") + '</b></div>'
+        + '<input type="range" id="hours" min="' + lo + '" max="' + hi + '" step="' + st
+        + '" value="' + (cur === undefined ? lo : cur) + '">'
+        + '<div class="sliderfoot"><span>' + lo + '</span><span>' + hi + ' ч</span></div>'
+        + '<button class="clearval" id="hclear">не отвечать</button>';
+      s.appendChild(box);
+      app.appendChild(s);
+      const inp = box.querySelector("#hours"), out = box.querySelector("#hv");
+      inp.addEventListener("input", () => {
+        STATE.values[it.id] = Number(inp.value);
+        out.textContent = inp.value + " ч";
+        saveDraft();
+      });
+      box.querySelector("#hclear").addEventListener("click", (e) => {
+        e.stopPropagation();
+        delete STATE.values[it.id];
+        out.textContent = "—";
+        saveDraft();
+      });
+      continue;
+    }
+
     if (sec.kind === "choice") {
       s.innerHTML = "<h2>" + esc(sec.title) + "</h2>";
       const chips = document.createElement("div");
@@ -214,7 +307,10 @@ function render() {
     for (const it of sec.items) {
       const row = document.createElement("div");
       row.className = "row";
-      row.innerHTML = '<div class="label">' + esc(it.text) + "</div>"
+      const guide = protocolsFor(it.id);
+      row.innerHTML = '<div class="label' + (guide.length ? ' hasguide' : '')
+        + '" data-guide="' + it.id + '">' + esc(it.text)
+        + (guide.length ? '<i class="gmark">?</i>' : '') + "</div>"
         + '<button class="tog done" data-id="' + it.id + '" data-k="done" aria-pressed="false">✓</button>'
         + '<button class="tog joy"  data-id="' + it.id + '" data-k="joy"  aria-pressed="false">♥</button>';
       rows.appendChild(row);
@@ -274,6 +370,8 @@ function saveDraft() {
 function loadDraft() {
   try {
     const raw = localStorage.getItem(LS_DRAFT + dayKey());
+    // Черновик мог лечь до появления ползунка: без этого объект
+    // приходит без values, и первое же обращение падает.
     if (raw) STATE = Object.assign(STATE, JSON.parse(raw));
   } catch (e) {}
 }
@@ -348,6 +446,10 @@ async function upload() {
     enjoyed: Object.keys(STATE.joy).filter(k => STATE.joy[k]).map(Number),
     asked: QUESTIONS.sections.flatMap(s => s.items.map(i => i.id)),
     diary: STATE.diary || "",
+    // Только то, что реально тронуто. Пустое сюда не попадает: «не
+    // ответил» и «ноль часов» — разные сутки, и ноль по умолчанию
+    // превратил бы пустоту в число.
+    values: STATE.values || {},
   };
 
   const q = encodeURIComponent("name='" + name + "' and '" + folderId + "' in parents and trashed=false");
