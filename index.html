@@ -204,13 +204,23 @@ function decodePayload(b64) {
 // --- «как наслаждаться этим» ------------------------------------------------
 // Протоколы приезжают тем же фрагментом, что и вопросы. Их может не быть вовсе
 // (старая ссылка) — тогда пункты просто не кликаются, и это не ошибка.
-function protocolsFor(id) {
-  const all = (QUESTIONS && QUESTIONS.protocols) || [];
-  return all.filter(p => p.item === id);
+function allProtocols() { return (QUESTIONS && QUESTIONS.protocols) || []; }
+
+// Свой протокол пункта, а если своего нет — запасной. Запасных два, и выбор
+// между ними не косметический: «как наслаждаться курением» — не тот вопрос,
+// который стоит задавать над срывом. Для срыва уместен протокол про сам момент
+// удержания, для остального — базовое наслаждение, оно универсально по
+// построению («закрыть глаза, дышать глубже, почувствовать пульс»).
+function protocolsFor(id, negative) {
+  const all = allProtocols();
+  const own = all.filter(p => p.item === id);
+  if (own.length) return own;
+  const slug = negative ? "sad_refusal" : "base";
+  return all.filter(p => p.slug === slug);
 }
 
-function openGuide(id) {
-  const list = protocolsFor(id);
+function openGuide(id, negative) {
+  const list = protocolsFor(id, negative);
   if (!list.length) return;
   const sheet = document.getElementById("sheet");
   sheet.innerHTML = list.map(p =>
@@ -225,9 +235,35 @@ function openGuide(id) {
 
 function closeGuide() { document.getElementById("guide").classList.remove("open"); }
 
+// Двенадцать протоколов не привязаны ни к одному пункту опросника — совмещение
+// процессов, грустные состояния, принятие решения. Через нажатие на строку они
+// недостижимы по определению, а лежать в файле и не показываться — то же самое,
+// что их не иметь. Отсюда отдельный список: он показывает ВСЕ, сгруппированные.
+function openAllGuides() {
+  const all = allProtocols();
+  if (!all.length) return;
+  const groups = [];
+  for (const p of all) {
+    let g = groups.find(x => x.name === p.group);
+    if (!g) groups.push(g = { name: p.group, items: [] });
+    g.items.push(p);
+  }
+  const sheet = document.getElementById("sheet");
+  sheet.innerHTML = groups.map(g =>
+      '<div class="grp">' + esc(g.name) + "</div>"
+    + g.items.map(p =>
+        "<h3>" + esc(p.title) + "</h3>"
+        + '<div class="mins">' + (p.minutes ? p.minutes + " мин" : "") + "</div>"
+        + "<ol>" + p.steps.map(x => "<li>" + esc(x) + "</li>").join("") + "</ol>"
+      ).join("")
+  ).join("") + '<button id="gclose">Закрыть</button>';
+  document.getElementById("guide").classList.add("open");
+  sheet.querySelector("#gclose").addEventListener("click", closeGuide);
+}
+
 document.addEventListener("click", (e) => {
   const lab = e.target.closest && e.target.closest(".label.hasguide");
-  if (lab) { openGuide(Number(lab.dataset.guide)); return; }
+  if (lab) { openGuide(Number(lab.dataset.guide), lab.dataset.neg === '1'); return; }
   if (e.target && e.target.id === "guide") closeGuide();
 });
 
@@ -307,9 +343,9 @@ function render() {
     for (const it of sec.items) {
       const row = document.createElement("div");
       row.className = "row";
-      const guide = protocolsFor(it.id);
+      const guide = protocolsFor(it.id, !!sec.negative);
       row.innerHTML = '<div class="label' + (guide.length ? ' hasguide' : '')
-        + '" data-guide="' + it.id + '">' + esc(it.text)
+        + '" data-guide="' + it.id + '" data-neg="' + (sec.negative ? 1 : 0) + '">' + esc(it.text)
         + (guide.length ? '<i class="gmark">?</i>' : '') + "</div>"
         + '<button class="tog done" data-id="' + it.id + '" data-k="done" aria-pressed="false">✓</button>'
         + '<button class="tog joy"  data-id="' + it.id + '" data-k="joy"  aria-pressed="false">♥</button>';
@@ -318,6 +354,16 @@ function render() {
     s.appendChild(rows);
     app.appendChild(s);
   }
+
+  const g = document.createElement("section");
+  g.innerHTML = "<h2>Как наслаждаться</h2>";
+  const gb = document.createElement("button");
+  gb.className = "clearval";
+  gb.id = "allguides";
+  gb.textContent = "Все протоколы — список";
+  gb.addEventListener("click", (e) => { e.stopPropagation(); openAllGuides(); });
+  g.appendChild(gb);
+  app.appendChild(g);
 
   const d = document.createElement("section");
   d.innerHTML = "<h2>Дневник дня</h2>";
