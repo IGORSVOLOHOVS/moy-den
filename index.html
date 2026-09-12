@@ -133,6 +133,16 @@
   .sheet .grp { color:var(--dim); font-size:.75rem; text-transform:uppercase; letter-spacing:.04em; }
   .sheet button { width:100%; padding:.8rem; border:0; border-radius:.7rem;
                   background:var(--done); color:#fff; font-size:1rem; }
+  /* --- выбор суток --- */
+  .daypick { display:flex; align-items:center; gap:.5rem; margin-top:.6rem; }
+  .daypick label { color:var(--dim); font-size:.8rem; }
+  .daypick input[type=date] { background:var(--card); color:var(--text);
+      border:1px solid var(--line); border-radius:.5rem; padding:.35rem .5rem;
+      font-size:.9rem; font-family:inherit; }
+  .daypick button { background:none; border:1px solid var(--line); color:var(--dim);
+      border-radius:.5rem; padding:.35rem .6rem; font-size:.8rem; }
+  .pastwarn { margin-top:.5rem; padding:.4rem .6rem; border-radius:.5rem;
+      background:rgba(240,160,32,.12); color:var(--joy); font-size:.82rem; }
 </style>
 </head>
 <body>
@@ -141,6 +151,12 @@
 <header>
   <h1>Мой день</h1>
   <div class="sub" id="sub">—</div>
+  <div class="daypick">
+    <label for="day">Сутки</label>
+    <input type="date" id="day">
+    <button id="today" type="button">сегодня</button>
+  </div>
+  <div class="pastwarn" id="pastwarn" hidden>Заполняешь прошедший день</div>
 </header>
 
 <main id="app"></main>
@@ -166,11 +182,46 @@ let STATE = { done: {}, joy: {}, diary: "", values: {} };
 
 // Сутки меняются не в полночь, а в 5 утра: заполнение в 00:30 - это про
 // прошедший день, и датировать его завтрашним числом значит потерять день.
+// Сутки, которые сейчас заполняются. По умолчанию сегодняшние, но их можно
+// перевести назад: забыть вечером — обычное дело, и единственной альтернативой
+// был бы скрипт на компьютере. Вперёд нельзя: заполнять ещё не прожитый день
+// значит записывать предсказание вместо наблюдения.
+let TARGET_DAY = null;
+function targetDay() { return TARGET_DAY || dayKey(); }
+
 function dayKey(now = new Date()) {
   const d = new Date(now);
   if (d.getHours() < 5) d.setDate(d.getDate() - 1);
   return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0")
        + "-" + String(d.getDate()).padStart(2, "0");
+}
+
+// --- выбор суток ------------------------------------------------------------
+// Вперёд ставить нельзя: max = сегодня. Заполнять ещё не прожитый день значит
+// записывать предсказание вместо наблюдения, а весь смысл ряда в обратном.
+function setupDayPicker() {
+  const input = document.getElementById("day");
+  const warn = document.getElementById("pastwarn");
+  input.max = dayKey();
+  input.value = targetDay();
+
+  function apply(value) {
+    if (!value) return;
+    if (value > dayKey()) { value = dayKey(); input.value = value; }
+    TARGET_DAY = value;
+    warn.hidden = (value === dayKey());
+    // Черновик привязан к суткам: у каждого дня свой. Без перезагрузки
+    // состояния вчерашний день открылся бы с сегодняшними галками.
+    STATE = { done: {}, joy: {}, diary: "", values: {} };
+    loadDraft();
+    render();
+  }
+
+  input.addEventListener("change", () => apply(input.value));
+  document.getElementById("today").addEventListener("click", () => {
+    input.value = dayKey();
+    apply(input.value);
+  });
 }
 
 function say(msg, cls = "") {
@@ -406,16 +457,16 @@ function paint() {
   const total = QUESTIONS.sections.reduce((n, s) => n + s.items.length, 0);
   const done = Object.values(STATE.done).filter(Boolean).length;
   document.getElementById("sub").textContent =
-    dayKey() + " · отмечено " + done + " из " + total;
+    targetDay() + " · отмечено " + done + " из " + total;
 }
 
 // --- черновик -------------------------------------------------------------
 function saveDraft() {
-  try { localStorage.setItem(LS_DRAFT + dayKey(), JSON.stringify(STATE)); } catch (e) {}
+  try { localStorage.setItem(LS_DRAFT + targetDay(), JSON.stringify(STATE)); } catch (e) {}
 }
 function loadDraft() {
   try {
-    const raw = localStorage.getItem(LS_DRAFT + dayKey());
+    const raw = localStorage.getItem(LS_DRAFT + targetDay());
     // Черновик мог лечь до появления ползунка: без этого объект
     // приходит без values, и первое же обращение падает.
     if (raw) STATE = Object.assign(STATE, JSON.parse(raw));
@@ -480,7 +531,7 @@ async function ensureFolder() {
 }
 
 async function upload() {
-  const day = dayKey();
+  const day = targetDay();
   const folderId = await ensureFolder();
   const name = day + ".json";
 
@@ -583,6 +634,7 @@ document.getElementById("send").addEventListener("click", async () => {
     } catch (e) {}
   }
 
+  setupDayPicker();
   render();
 })();
 </script>
