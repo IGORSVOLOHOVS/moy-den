@@ -8,11 +8,18 @@
 <!--
   Дневник «Мой день». Статическая страница, живёт на GitHub Pages.
 
-  ЗДЕСЬ НЕТ НИ ОДНОГО ЛИЧНОГО ПУНКТА, И БЫТЬ НЕ ДОЛЖНО. Pages отдаёт репозиторий
-  публично, а список вопросов - самое личное, что есть в этой затее. Вопросы
-  приезжают один раз ссылкой вида ...#q=<base64> и оседают в localStorage
-  телефона. Фрагмент адреса (всё после #) браузер на сервер не отправляет, в
-  логах Pages его нет.
+  ЗДЕСЬ НЕТ НИ ОДНОГО ЛИЧНОГО ПУНКТА В ОТКРЫТОМ ВИДЕ, И БЫТЬ НЕ ДОЛЖНО. Pages
+  отдаёт репозиторий публично, а список вопросов - самое личное, что есть в
+  этой затее.
+
+  С 19.10.2026 список лежит рядом файлом questions.enc, зашифрованным AES-GCM.
+  Ключ приезжает ОДИН раз короткой ссылкой ...#k=<ключ> и живёт в localStorage
+  телефона; без ключа файл - шум. Страница перечитывает файл при каждом
+  открытии, так что правка опросника доезжает сама, без новой ссылки. Раньше
+  весь список ехал во фрагменте (...#q=<base64>, 16-18 тыс. знаков): в
+  сообщение Telegram такая ссылка не влезала, и v5, а потом v7 до телефона не
+  доехали. Старый путь #q= оставлен и работает как прежде. Фрагмент адреса (всё
+  после #) браузер на сервер не отправляет, в логах Pages его нет.
 
   Запись ответов - прямо в Google Drive, областью drive.file: страница видит
   только те файлы, которые создала сама, до остального Drive ей хода нет.
@@ -173,6 +180,8 @@
 const LS_QUESTIONS = "moyden.questions";
 const LS_DRAFT     = "moyden.draft.";
 const LS_FOLDER    = "moyden.folderId";
+const LS_KEY       = "moyden.key";
+const QUESTIONS_FILE = "questions.enc";
 const FOLDER_NAME  = "Мой день — записи";
 const SCOPE        = "https://www.googleapis.com/auth/drive.file";
 
@@ -244,10 +253,35 @@ function readFragment() {
   return out;
 }
 
-function decodePayload(b64) {
+function b64bytes(b64) {
   const bin = atob(b64.replace(/-/g, "+").replace(/_/g, "/"));
-  const bytes = Uint8Array.from(bin, c => c.charCodeAt(0));
-  return JSON.parse(new TextDecoder().decode(bytes));
+  return Uint8Array.from(bin, c => c.charCodeAt(0));
+}
+
+function decodePayload(b64) {
+  return JSON.parse(new TextDecoder().decode(b64bytes(b64)));
+}
+
+// Список из questions.enc: {v:1, iv, ct}, ct - шифротекст AES-GCM вместе с
+// тегом (так его отдаёт и WebCrypto, и AESGCM из питона). Ошибку называем
+// по месту: «нет файла», «ключ не подходит» и «нет сети» чинятся по-разному.
+async function fetchQuestions(keyB64) {
+  let r;
+  try {
+    r = await fetch(QUESTIONS_FILE, { cache: "no-store" });
+  } catch (e) {
+    throw new Error("нет сети");
+  }
+  if (!r.ok) throw new Error("файла вопросов нет на сайте (HTTP " + r.status + ")");
+  const box = await r.json();
+  const key = await crypto.subtle.importKey("raw", b64bytes(keyB64), "AES-GCM", false, ["decrypt"]);
+  let plain;
+  try {
+    plain = await crypto.subtle.decrypt({ name: "AES-GCM", iv: b64bytes(box.iv) }, key, b64bytes(box.ct));
+  } catch (e) {
+    throw Object.assign(new Error("ключ из ссылки не подходит к файлу вопросов"), { badKey: true });
+  }
+  return JSON.parse(new TextDecoder().decode(plain));
 }
 
 // --- отрисовка ------------------------------------------------------------
@@ -324,8 +358,8 @@ function render() {
 
   if (!QUESTIONS) {
     app.innerHTML = '<div class="setup">Список вопросов ещё не загружен.<br><br>'
-      + 'Открой ссылку с вопросами - её присылает бот. Она выглядит так:<br>'
-      + '<code>' + location.origin + location.pathname + '#q=…</code><br><br>'
+      + 'Открой ссылку с ключом - её присылает бот. Она выглядит так:<br>'
+      + '<code>' + location.origin + location.pathname + '#k=…</code><br><br>'
       + 'После первого раза список останется в памяти телефона, и дальше '
       + 'достаточно обычного адреса.</div>';
     return;
@@ -456,8 +490,10 @@ function paint() {
   });
   const total = QUESTIONS.sections.reduce((n, s) => n + s.items.length, 0);
   const done = Object.values(STATE.done).filter(Boolean).length;
+  // Номер опросника на виду: «доехала ли новая версия» иначе не проверить
+  // ничем, кроме пересчёта пунктов глазами.
   document.getElementById("sub").textContent =
-    targetDay() + " · отмечено " + done + " из " + total;
+    targetDay() + " · опросник v" + (QUESTIONS.version || "?") + " · отмечено " + done + " из " + total;
 }
 
 // --- черновик -------------------------------------------------------------
@@ -614,12 +650,34 @@ document.getElementById("send").addEventListener("click", async () => {
     try {
       QUESTIONS = decodePayload(frag.q);
       localStorage.setItem(LS_QUESTIONS, JSON.stringify(QUESTIONS));
-      // Чистим адрес, чтобы вопросы не остались в истории браузера.
-      history.replaceState(null, "", location.pathname);
     } catch (e) { say("не разобрал список вопросов из ссылки", "err"); }
   }
+  // Чистим адрес, чтобы ни вопросы, ни ключ не остались в истории браузера.
+  if (frag.q || frag.k) history.replaceState(null, "", location.pathname);
   if (!QUESTIONS) {
     try { QUESTIONS = JSON.parse(localStorage.getItem(LS_QUESTIONS) || "null"); } catch (e) {}
+  }
+
+  // Ключ есть - перечитываем список с сайта при каждом открытии. Не вышло -
+  // остаёмся на сохранённом и говорим это вслух: молча показанный старый
+  // список выглядит ровно как новый.
+  // Ключ из ссылки запоминаем, только если он не отвергнут файлом: битая или
+  // чужая ссылка иначе затёрла бы рабочий ключ, и обновления молча
+  // прекратились бы. Нет сети — ключ всё равно запоминаем, проверим в
+  // следующий раз.
+  let key = frag.k || null;
+  if (!key) { try { key = localStorage.getItem(LS_KEY); } catch (e) {} }
+  if (key && !frag.q) {
+    try {
+      QUESTIONS = await fetchQuestions(key);
+      localStorage.setItem(LS_QUESTIONS, JSON.stringify(QUESTIONS));
+      if (frag.k) localStorage.setItem(LS_KEY, frag.k);
+    } catch (e) {
+      if (frag.k && !e.badKey) { try { localStorage.setItem(LS_KEY, frag.k); } catch (_) {} }
+      say(QUESTIONS
+        ? "список не обновил: " + e.message + " — показываю сохранённый v" + (QUESTIONS.version || "?")
+        : "не загрузил список вопросов: " + e.message, "err");
+    }
   }
 
   loadDraft();
